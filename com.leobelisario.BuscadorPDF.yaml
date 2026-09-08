@@ -1,0 +1,81 @@
+app-id: com.leobelisario.BuscadorPDF
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+command: buscador-pdf
+
+finish-args:
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --share=ipc
+  - --device=dri
+  # Permite indexar PDFs sem dar permissão para alterar os documentos.
+  - --filesystem=home:ro
+
+modules:
+  - name: dependencias
+    buildsystem: simple
+    # Compilação local: pip precisa de rede para baixar as dependências.
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - pip3 install --no-cache-dir --prefix=/app -r requirements.txt
+    sources:
+      - type: file
+        path: requirements.txt
+
+  - name: buscador-pdf
+    buildsystem: simple
+    build-commands:
+      - install -Dm644 main.py /app/share/buscador-pdf/main.py
+      - install -Dm644 bridge.py /app/share/buscador-pdf/bridge.py
+      - mkdir -p /app/share/buscador-pdf/core /app/share/buscador-pdf/ui
+      - install -m644 core/*.py /app/share/buscador-pdf/core/
+      - install -m644 ui/*.qml /app/share/buscador-pdf/ui/
+      - install -Dm644 icone.png /app/share/icons/hicolor/512x512/apps/com.leobelisario.BuscadorPDF.png
+      - mkdir -p /app/bin /app/share/applications
+      - |
+        cat << 'EOF' > /app/bin/buscador-pdf
+        #!/bin/sh
+        set -eu
+        export PYTHONPATH="/app/share/buscador-pdf${PYTHONPATH:+:$PYTHONPATH}"
+        export PYTHONDONTWRITEBYTECODE=1
+        # main.py abre index.db por caminho relativo; /app é somente leitura.
+        mkdir -p "$XDG_DATA_HOME"
+        cd "$XDG_DATA_HOME"
+        exec python3 /app/share/buscador-pdf/main.py "$@"
+        EOF
+      - chmod +x /app/bin/buscador-pdf
+      - |
+        cat << 'EOF' > /app/share/applications/com.leobelisario.BuscadorPDF.desktop
+        [Desktop Entry]
+        Name=BuscadorPDF
+        Comment=Indexação e busca de conteúdo em documentos PDF
+        Exec=buscador-pdf
+        Icon=com.leobelisario.BuscadorPDF
+        Terminal=false
+        Type=Application
+        Categories=Office;Utility;
+        Keywords=PDF;Busca;Pesquisa;
+        EOF
+    sources:
+      - type: dir
+        path: .
+        skip:
+          - .git
+          - .agents
+          - .codex
+          - .venv
+          - venv
+          - __pycache__
+          - core/__pycache__
+          - tests
+          - .flatpak-builder
+          - build-dir
+          - repo
+          - '*.flatpak'
+          - 'index.db*'
+
+# Comandos principais (execute na raiz do projeto):
+# flatpak-builder --repo=repo --force-clean build-dir com.leobelisario.BuscadorPDF.yaml && flatpak build-bundle repo BuscadorPDF.flatpak com.leobelisario.BuscadorPDF && flatpak install --user --reinstall BuscadorPDF.flatpak
