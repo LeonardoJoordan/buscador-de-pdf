@@ -60,6 +60,8 @@ class AppBridge(QObject):
     previewChanged = Signal()
     advancedSettingsChanged = Signal()
     searchStateChanged = Signal()
+    directedSearchChanged = Signal()
+    generalSearchReplaced = Signal()
 
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
@@ -73,6 +75,10 @@ class AppBridge(QObject):
         self._indexed_files = []
         self._is_indexing = False
         self._last_query = ""
+        self._directed_filepaths = []
+        self._general_search_snapshot = None
+        self._directed_search_snapshot = None
+        self._directed_refresh_required = False
 
         # Estado da prévia atual
         self._current_preview_path = ""
@@ -104,6 +110,37 @@ class AppBridge(QObject):
     @Property(list, notify=searchResultsChanged)
     def searchResults(self):
         return self._search_results
+
+    @Property(str, notify=searchResultsChanged)
+    def currentQuery(self):
+        return self._last_query
+
+    @Property(bool, notify=directedSearchChanged)
+    def isDirectedSearch(self):
+        return self._general_search_snapshot is not None
+
+    @Property(list, notify=directedSearchChanged)
+    def directedFilepaths(self):
+        return self._directed_filepaths
+
+    @Property(bool, notify=directedSearchChanged)
+    def hasSavedDirectedSearch(self):
+        return self.isDirectedSearch or self._directed_search_snapshot is not None
+
+    @Property(list, notify=searchResultsChanged)
+    def resultManuals(self):
+        results = (self._general_search_snapshot["results"]
+                   if self._general_search_snapshot is not None
+                   else self._search_results)
+        counts = {}
+        for result in results:
+            path = result.get("filepath", "")
+            if path:
+                counts[path] = counts.get(path, 0) + 1
+        return [
+            {"filepath": path, "filename": os.path.basename(path), "result_count": count}
+            for path, count in sorted(counts.items(), key=lambda item: os.path.basename(item[0]).lower())
+        ]
 
     @Property(list, notify=indexedFilesChanged)
     def indexedFiles(self):
@@ -197,6 +234,8 @@ class AppBridge(QObject):
         query = query.strip()
         self._search_error = ""
         if not query:
+            if not self.isDirectedSearch:
+                self._reset_directed_search()
             self._last_query = ""
             self._search_results = []
             self.searchResultsChanged.emit()
@@ -207,11 +246,83 @@ class AppBridge(QObject):
             "allow_out_of_order": self._allow_out_of_order,
             "allow_fuzzy": self._allow_fuzzy,
             "fuzzy_threshold": self._fuzzy_threshold,
+            "filepaths": self._directed_filepaths if self.isDirectedSearch else None,
         }, self)
         self._search_worker.finished.connect(self._on_search_finished)
         self._is_searching = True
         self.searchStateChanged.emit()
         self._search_worker.start()
+
+    @Slot(list, result=bool)
+    def beginDirectedSearch(self, filepaths):
+        if self._is_searching or self.isDirectedSearch:
+            return False
+        available = {item["filepath"] for item in self.resultManuals}
+        selected = list(dict.fromkeys(path for path in filepaths if path in available))
+        if not selected:
+            return False
+        added = set(selected) - set(self._directed_filepaths)
+        self._general_search_snapshot = self._capture_search()
+        self._directed_filepaths = selected
+        if self._directed_search_snapshot is not None:
+            self._restore_search(self._directed_search_snapshot)
+            self._search_results = [result for result in self._search_results
+                                    if result["filepath"] in selected]
+            if self._current_preview_path not in selected:
+                self._current_preview_path = ""
+                self._current_preview_page = 1
+                self._current_total_pages = 1
+            self._directed_refresh_required = self._directed_refresh_required or bool(added)
+        else:
+            self._last_query = ""
+            self._search_results = []
+            self._search_error = ""
+        self.searchResultsChanged.emit()
+        self.searchStateChanged.emit()
+        self.previewChanged.emit()
+        self.directedSearchChanged.emit()
+        if self._directed_refresh_required and self._last_query:
+            self.search(self._last_query)
+        return True
+
+    def _capture_search(self):
+        return {
+            "query": self._last_query,
+            "results": self._search_results,
+            "error": self._search_error,
+            "preview_path": self._current_preview_path,
+            "preview_page": self._current_preview_page,
+            "preview_total": self._current_total_pages,
+        }
+
+    def _restore_search(self, snapshot):
+        self._last_query = snapshot["query"]
+        self._search_results = snapshot["results"]
+        self._search_error = snapshot["error"]
+        self._current_preview_path = snapshot["preview_path"]
+        self._current_preview_page = snapshot["preview_page"]
+        self._current_total_pages = snapshot["preview_total"]
+
+    def _reset_directed_search(self):
+        self._directed_search_snapshot = None
+        self._directed_refresh_required = False
+        self._directed_filepaths = []
+        self.generalSearchReplaced.emit()
+        self.directedSearchChanged.emit()
+
+    @Slot(result=bool)
+    def returnToGeneralSearch(self):
+        if self._is_searching or self._general_search_snapshot is None:
+            return False
+        snapshot = self._general_search_snapshot
+        self._directed_search_snapshot = self._capture_search()
+        self._general_search_snapshot = None
+        self._restore_search(snapshot)
+        self.searchResultsChanged.emit()
+        self.searchStateChanged.emit()
+        self.previewChanged.emit()
+        self.directedSearchChanged.emit()
+        return True
 
     @Slot()
     def _on_search_finished(self):
@@ -220,6 +331,10 @@ class AppBridge(QObject):
             return
         self._search_error = worker.error
         if not worker.error:
+            if not self.isDirectedSearch:
+                self._reset_directed_search()
+            else:
+                self._directed_refresh_required = False
             self._last_query = worker.query
             self._search_results = worker.results
             self.searchResultsChanged.emit()

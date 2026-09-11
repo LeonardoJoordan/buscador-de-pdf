@@ -48,6 +48,114 @@ ApplicationWindow {
     readonly property real zoomMax: 3.5
     readonly property real zoomStep: 0.15
     property real userZoom: 1.0
+    property real savedPreviewX: 0
+    property real savedPreviewY: 0
+    property bool restoringGeneralPreview: false
+    property int selectedManualCount: 0
+    property var generalViewState: null
+    property var directedViewState: null
+
+    ListModel { id: directedManualsModel }
+
+    function refreshDirectedManuals() {
+        if (Bridge.isDirectedSearch)
+            return
+        directedManualsModel.clear()
+        selectedManualCount = 0
+        for (let i = 0; i < Bridge.resultManuals.length; ++i) {
+            const manual = Bridge.resultManuals[i]
+            const selected = Bridge.directedFilepaths.indexOf(manual.filepath) >= 0
+            directedManualsModel.append({
+                filepath: manual.filepath,
+                filename: manual.filename,
+                result_count: manual.result_count,
+                selected: selected
+            })
+            if (selected)
+                selectedManualCount++
+        }
+    }
+
+    function selectedManualPaths() {
+        let paths = []
+        for (let i = 0; i < directedManualsModel.count; ++i) {
+            if (directedManualsModel.get(i).selected)
+                paths.push(directedManualsModel.get(i).filepath)
+        }
+        return paths
+    }
+
+    function captureViewState() {
+        return {text: searchInput.text, index: resultsList.currentIndex,
+                resultsY: resultsList.contentY, zoom: userZoom,
+                previewX: flick.contentX, previewY: flick.contentY}
+    }
+
+    function restoreViewState(state) {
+        searchInput.text = state ? state.text : Bridge.currentQuery
+        if (!state)
+            return
+        savedPreviewX = state.previewX
+        savedPreviewY = state.previewY
+        restoringGeneralPreview = true
+        userZoom = state.zoom
+        Qt.callLater(function() {
+            resultsList.currentIndex = state.index
+            resultsList.forceLayout()
+            resultsList.contentY = state.resultsY
+            root.finishPreviewRestore()
+        })
+    }
+
+    function finishPreviewRestore() {
+        if (!restoringGeneralPreview || previewImg.status === Image.Loading)
+            return
+        flick.contentX = savedPreviewX
+        flick.contentY = savedPreviewY
+        restoringGeneralPreview = false
+    }
+
+    function beginDirectedSearch() {
+        const state = captureViewState()
+        const paths = selectedManualPaths()
+        const previousPaths = Bridge.directedFilepaths
+        const scopeChanged = paths.length !== previousPaths.length ||
+                             paths.some(path => previousPaths.indexOf(path) < 0)
+        if (Bridge.beginDirectedSearch(paths)) {
+            generalViewState = state
+            let view = directedViewState
+            if (view && scopeChanged) {
+                view = Object.assign({}, view, {text: Bridge.currentQuery, index: -1, resultsY: 0})
+            }
+            restoreViewState(view)
+            if (!directedViewState)
+                searchInput.forceActiveFocus()
+        }
+    }
+
+    function returnToGeneralSearch() {
+        const state = captureViewState()
+        if (!Bridge.returnToGeneralSearch())
+            return
+        directedViewState = state
+        restoreViewState(generalViewState)
+    }
+
+    Connections {
+        target: Bridge
+        function onSearchResultsChanged() { root.refreshDirectedManuals() }
+        function onGeneralSearchReplaced() {
+            root.directedViewState = null
+            root.generalViewState = null
+            root.restoringGeneralPreview = false
+        }
+        function onDirectedSearchChanged() {
+            if (!Bridge.isDirectedSearch)
+                root.refreshDirectedManuals()
+        }
+    }
+
+    Component.onCompleted: refreshDirectedManuals()
 
     function zoomBy(delta) {
         userZoom = Math.min(zoomMax, Math.max(zoomMin, userZoom + delta))
@@ -63,7 +171,10 @@ ApplicationWindow {
         flick.contentY = Math.max(0, (flick.contentHeight - flick.height) / 2)
     }
 
-    onUserZoomChanged: Qt.callLater(centerPreview)
+    onUserZoomChanged: {
+        if (!restoringGeneralPreview)
+            Qt.callLater(centerPreview)
+    }
 
     function navigationReady() {
         return !searchInput.activeFocus && !advancedSettingsDialog.visible
@@ -246,33 +357,198 @@ ApplicationWindow {
             color: "#25252d"
 
             ColumnLayout {
+                id: sidebarLayout
                 anchors.fill: parent
                 anchors.margins: 12
                 spacing: 10
 
-                Text {
-                    text: "Arquivos Indexados"
-                    font.pixelSize: 15
-                    font.bold: true
-                    color: "#e0e0e0"
+                ColumnLayout {
+                    id: directedSearchPanel
+                    property bool expanded: false
+                    Layout.fillWidth: true
+                    Layout.fillHeight: false
+                    spacing: 6
+
+                        ToolButton {
+                            id: directedHeader
+                            Layout.fillWidth: true
+                            implicitHeight: 32
+                            padding: 4
+                            onClicked: directedSearchPanel.expanded = !directedSearchPanel.expanded
+                            contentItem: Text {
+                                text: (directedSearchPanel.expanded ? "▾  " : "▸  ") + "Busca direcionada"
+                                color: "#ffffff"
+                                font.pixelSize: 14
+                                font.bold: true
+                                elide: Text.ElideRight
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+
+                        Text {
+                            visible: directedSearchPanel.expanded && directedManualsModel.count === 0
+                            text: "Faça uma busca geral para escolher os manuais."
+                            wrapMode: Text.Wrap
+                            color: "#8b8b96"
+                            font.pixelSize: 11
+                            Layout.fillWidth: true
+                        }
+
+                        ListView {
+                            id: directedManualsList
+                            visible: directedSearchPanel.expanded && directedManualsModel.count > 0
+                            Layout.fillWidth: true
+                            Layout.fillHeight: false
+                            Layout.preferredHeight: Math.min(
+                                directedManualsModel.count * 40 + Math.max(0, directedManualsModel.count - 1) * spacing,
+                                Math.max(0, sidebarLayout.height / 2 - directedHeader.implicitHeight
+                                         - directedSearchButton.implicitHeight
+                                         - (manualSelectionActions.visible ? manualSelectionActions.implicitHeight : 0)
+                                         - directedSearchPanel.spacing * (manualSelectionActions.visible ? 3 : 2)))
+                            clip: true
+                            spacing: 2
+                            model: directedManualsModel
+                            ScrollBar.vertical: StyledScrollBar {
+                                id: directedScrollBar
+                                policy: ScrollBar.AsNeeded
+                                visible: directedManualsList.contentHeight > directedManualsList.height + 0.5
+                            }
+
+                            delegate: CheckBox {
+                                id: manualCheck
+                                width: directedManualsList.width - (directedScrollBar.visible ? 12 : 0)
+                                height: 40
+                                padding: 6
+                                spacing: 6
+                                checked: model.selected
+                                enabled: !Bridge.isDirectedSearch && !Bridge.isSearching
+                                onToggled: {
+                                    if (model.selected === checked)
+                                        return
+                                    directedManualsModel.setProperty(index, "selected", checked)
+                                    root.selectedManualCount += checked ? 1 : -1
+                                }
+                                contentItem: RowLayout {
+                                    spacing: 4
+                                    Item { Layout.preferredWidth: 22 }
+                                    Text {
+                                        text: model.filename
+                                        color: parent.parent.enabled ? "#e0e0e0" : "#9999a3"
+                                        font.pixelSize: 11
+                                        elide: Text.ElideMiddle
+                                        Layout.fillWidth: true
+                                    }
+                                    Text {
+                                        text: model.result_count
+                                        color: "#8b8b96"
+                                        font.pixelSize: 11
+                                    }
+                                }
+                                indicator: Rectangle {
+                                    x: manualCheck.leftPadding
+                                    y: (manualCheck.height - height) / 2
+                                    width: 16
+                                    height: 16
+                                    radius: 3
+                                    color: manualCheck.checked ? "#3d7eff" : "#25252d"
+                                    border.color: manualCheck.checked ? "#3d7eff" : "#777783"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: manualCheck.checked ? "✓" : ""
+                                        color: "white"
+                                        font.pixelSize: 12
+                                    }
+                                }
+                                background: Rectangle {
+                                    color: manualCheck.hovered ? "#32323c" : "#2a2a34"
+                                    radius: 4
+                                }
+                                ToolTip.visible: hovered
+                                ToolTip.text: model.filepath
+                            }
+                        }
+
+                        RowLayout {
+                            id: manualSelectionActions
+                            enabled: !Bridge.isDirectedSearch && !Bridge.isSearching
+                            visible: directedSearchPanel.expanded && directedManualsModel.count > 0
+                                     && !Bridge.isDirectedSearch
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Button {
+                                text: "Todos"
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 0
+                                onClicked: {
+                                    for (let i = 0; i < directedManualsModel.count; ++i)
+                                        directedManualsModel.setProperty(i, "selected", true)
+                                    root.selectedManualCount = directedManualsModel.count
+                                }
+                            }
+                            Button {
+                                text: "Limpar"
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 0
+                                onClicked: {
+                                    for (let i = 0; i < directedManualsModel.count; ++i)
+                                        directedManualsModel.setProperty(i, "selected", false)
+                                    root.selectedManualCount = 0
+                                }
+                            }
+                        }
+
+                        Button {
+                            id: directedSearchButton
+                            visible: directedSearchPanel.expanded
+                            Layout.fillWidth: true
+                            text: Bridge.isDirectedSearch ? "Retornar à busca geral"
+                                  : Bridge.hasSavedDirectedSearch ? "Retomar busca direcionada" : "Buscar nos selecionados"
+                            enabled: !Bridge.isSearching &&
+                                     (Bridge.isDirectedSearch || root.selectedManualCount > 0)
+                            onClicked: Bridge.isDirectedSearch
+                                       ? root.returnToGeneralSearch()
+                                       : root.beginDirectedSearch()
+                        }
+                }
+
+                ToolButton {
+                    id: indexedHeader
+                    property bool expanded: false
+                    Layout.fillWidth: true
+                    implicitHeight: 32
+                    padding: 4
+                    onClicked: expanded = !expanded
+                    contentItem: Text {
+                        text: (indexedHeader.expanded ? "▾  " : "▸  ") + "Arquivos indexados"
+                        font.pixelSize: 14
+                        font.bold: true
+                        color: "#ffffff"
+                        elide: Text.ElideRight
+                        verticalAlignment: Text.AlignVCenter
+                    }
                 }
 
                 RowLayout {
+                    visible: indexedHeader.expanded
                     Layout.fillWidth: true
                     Layout.fillHeight: false
                     spacing: 6
 
                     Button {
-                        text: Bridge.isIndexing ? "Indexando..." : "📁 Selecionar Pasta"
+                        text: Bridge.isIndexing ? "Indexando..." : "Pasta"
                         enabled: !Bridge.isIndexing
                         Layout.fillWidth: true
+                        Layout.preferredWidth: 0
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Selecionar pasta com PDFs"
                         onClicked: folderPicker.open()
                     }
 
                     Button {
-                        text: "🔄"
+                        text: "Reindexar"
                         enabled: !Bridge.isIndexing && Bridge.indexedFiles.length > 0
-                        implicitWidth: 40
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 0
                         ToolTip.visible: hovered
                         ToolTip.text: "Reindexar arquivos já catalogados"
                         onClicked: Bridge.reindexAll()
@@ -281,14 +557,16 @@ ApplicationWindow {
 
                 ProgressBar {
                     Layout.fillWidth: true
-                    visible: Bridge.isIndexing
+                    visible: indexedHeader.expanded && Bridge.isIndexing
                     indeterminate: true
                 }
 
                 ListView {
                     id: fileList
+                    visible: indexedHeader.expanded
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    Layout.preferredHeight: 0
                     clip: true
                     model: Bridge.indexedFiles
                     spacing: 4
@@ -328,6 +606,10 @@ ApplicationWindow {
                         }
                     }
                 }
+                Item {
+                    visible: !indexedHeader.expanded
+                    Layout.fillHeight: true
+                }
             }
         }
 
@@ -352,7 +634,9 @@ ApplicationWindow {
                     TextField {
                         id: searchInput
                         onAccepted: if (!Bridge.isSearching) Bridge.search(text)
-                        placeholderText: "Buscar palavra ou frase..."
+                        placeholderText: Bridge.isDirectedSearch
+                                         ? "Buscar nos manuais selecionados..."
+                                         : "Buscar palavra ou frase..."
                         Layout.fillWidth: true
                         font.pixelSize: 14
                         color: "#ffffff"
@@ -558,8 +842,13 @@ ApplicationWindow {
                         }
 
                         onStatusChanged: {
-                            if (status === Image.Ready)
-                                Qt.callLater(root.centerPreview)
+                            if (status === Image.Ready) {
+                                if (root.restoringGeneralPreview) {
+                                    Qt.callLater(root.finishPreviewRestore)
+                                } else {
+                                    Qt.callLater(root.centerPreview)
+                                }
+                            }
                         }
                     }
                 }

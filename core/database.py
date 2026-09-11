@@ -126,6 +126,7 @@ class DatabaseManager:
         allow_fuzzy: bool = True,
         fuzzy_threshold: float = 65.0,
         result_limit: Optional[int] = None,
+        filepaths: Optional[List[str]] = None,
         cancelled=None,
     ) -> List[Dict[str, Any]]:
         """
@@ -148,16 +149,27 @@ class DatabaseManager:
 
         all_results: List[Dict[str, Any]] = []
 
+        if filepaths is not None:
+            filepaths = list(dict.fromkeys(filepaths))
+            if not filepaths:
+                return []
+
         with closing(self._get_connection()) as conn, conn:
             cursor = conn.cursor()
             try:
+                scope_sql = ""
+                parameters: List[Any] = [fts_query]
+                if filepaths is not None:
+                    scope_sql = f" AND filepath IN ({','.join('?' for _ in filepaths)})"
+                    parameters.extend(filepaths)
                 cursor.execute(
-                    """
+                    f"""
                     SELECT filepath, content FROM docs_fts
                     WHERE docs_fts MATCH ?
+                    {scope_sql}
                     ORDER BY rank;
                     """,
-                    (fts_query,),
+                    parameters,
                 )
                 candidates = cursor.fetchall()
             except sqlite3.OperationalError:
@@ -166,16 +178,16 @@ class DatabaseManager:
             if not candidates:
                 return []
 
+            candidate_paths = [row[0] for row in candidates]
+            placeholders = ",".join("?" for _ in candidate_paths)
             cursor.execute(
-                """
+                f"""
                 SELECT filepath, page_number, start_char, end_char
                 FROM page_offsets
-                WHERE filepath IN (
-                    SELECT filepath FROM docs_fts WHERE docs_fts MATCH ?
-                )
+                WHERE filepath IN ({placeholders})
                 ORDER BY filepath, start_char ASC;
                 """,
-                (fts_query,),
+                candidate_paths,
             )
             offsets_by_file: Dict[str, List[Tuple[int, int, int]]] = {}
             for filepath, page_number, start_char, end_char in cursor.fetchall():
