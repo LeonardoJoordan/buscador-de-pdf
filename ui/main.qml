@@ -333,7 +333,7 @@ ApplicationWindow {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: Qt.openUrlExternally("https://github.com/LeonardoJoordan/buscador-de-pdf")
+                    onClicked: Qt.openUrlExternally("https://github.com/LeonardoJoordan/LYNX-Atlas")
                 }
             }
         }

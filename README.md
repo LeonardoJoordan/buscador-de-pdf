@@ -99,4 +99,4 @@ licença AGPL-3.0-only do projeto.
 O código-fonte correspondente a cada binário oficial deve ser publicado na tag
 da mesma versão em:
 
-<https://github.com/LeonardoJoordan/buscador-de-pdf>
+<https://github.com/LeonardoJoordan/LYNX-Atlas>
