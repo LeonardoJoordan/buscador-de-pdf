@@ -1,26 +1,44 @@
 import os
-from typing import List, Optional
+from typing import Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from PySide6.QtCore import QThread, Signal
 from core.extractor import extract_pdf_data
 from core.database import DatabaseManager
 
+
+def scan_folder(folder_path):
+    """Retorna PDFs absolutos e extensões não suportadas encontradas."""
+    pdf_paths = []
+    unsupported_extensions = set()
+    for root, _, files in os.walk(folder_path):
+        for filename in files:
+            path = os.path.abspath(os.path.join(root, filename))
+            if filename.lower().endswith(".pdf"):
+                pdf_paths.append(path)
+            else:
+                extension = os.path.splitext(filename)[1].lower()
+                unsupported_extensions.add(extension or "sem extensão")
+    pdf_paths.sort(key=os.path.normcase)
+    return pdf_paths, sorted(unsupported_extensions, key=str.casefold)
+
+
 class IndexerWorker(QThread):
     # Sinais emitidos para a UI
     progress_changed = Signal(int, int)   # (processados, total)
     file_finished = Signal(str)           # nome do arquivo
+    unsupported_extensions_found = Signal(list)
     indexing_finished = Signal()          # conclusão de tudo
 
     def __init__(
         self,
         db_manager: DatabaseManager,
         folder_path: Optional[str] = None,
-        file_paths: Optional[List[str]] = None,
+        report_unsupported: bool = False,
         parent=None,
     ):
         super().__init__(parent)
         self.folder_path = folder_path
-        self.file_paths = file_paths
+        self.report_unsupported = report_unsupported
         self.db = db_manager
         self._is_running = True
 
@@ -28,17 +46,15 @@ class IndexerWorker(QThread):
         self._is_running = False
 
     def run(self):
-        if self.file_paths is not None:
-            # Reindexação: reprocessa apenas os arquivos já conhecidos, sem
-            # varrer nenhuma pasta (útil quando o conteúdo de um PDF mudou).
-            pdf_paths = list(self.file_paths)
-        else:
-            # Indexação normal: coleta todos os PDFs da pasta (inclusive subpastas)
-            pdf_paths = []
-            for root, _, files in os.walk(self.folder_path):
-                for file in files:
-                    if file.lower().endswith(".pdf"):
-                        pdf_paths.append(os.path.join(root, file))
+        # A pasta é a fonte da verdade: a cada execução descobrimos novamente
+        # todos os PDFs, inclusive em subpastas.
+        pdf_paths, unsupported_extensions = scan_folder(self.folder_path)
+        if self.report_unsupported and unsupported_extensions:
+            self.unsupported_extensions_found.emit(unsupported_extensions)
+
+        # Remove registros de arquivos apagados ou que pertenciam à pasta
+        # selecionada anteriormente. Também limpa o índice se a pasta estiver vazia.
+        self.db.remove_documents_except(pdf_paths)
 
         total_files = len(pdf_paths)
         if total_files == 0:

@@ -1,3 +1,19 @@
-/.flatpak-builder
-/.venv
-/BuscadorPDF.flatpak
+# Ambientes e caches Python
+/.venv/
+__pycache__/
+*.py[cod]
+/.python-version
+
+# Dados locais do usuário (podem conter texto e caminhos de documentos)
+*.db
+*.db-*
+*.db.bak*
+*.pdf
+!docs/*.pdf
+
+# Artefatos de compilação e empacotamento
+/build/
+/dist/
+/.flatpak-builder/
+/repo/
+*.flatpak

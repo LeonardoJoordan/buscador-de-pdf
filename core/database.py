@@ -119,6 +119,24 @@ class DatabaseManager:
             )
             conn.commit()
 
+    def remove_documents_except(self, filepaths: List[str]):
+        """Remove do índice tudo que não pertence ao retrato atual da pasta."""
+        with closing(self._get_connection()) as conn, conn:
+            conn.execute("CREATE TEMP TABLE current_pdf_paths (filepath TEXT PRIMARY KEY)")
+            conn.executemany(
+                "INSERT INTO current_pdf_paths (filepath) VALUES (?)",
+                [(filepath,) for filepath in filepaths],
+            )
+            for table in ("docs_fts", "page_offsets", "files"):
+                conn.execute(
+                    f"""DELETE FROM {table}
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM current_pdf_paths
+                            WHERE current_pdf_paths.filepath = {table}.filepath
+                        )"""
+                )
+            conn.commit()
+
     def search(
         self,
         query_term: str,

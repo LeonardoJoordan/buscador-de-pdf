@@ -1,8 +1,8 @@
-app-id: com.leobelisario.BuscadorPDF
+app-id: com.leobelisario.LYNXAtlas
 runtime: org.gnome.Platform
 runtime-version: '47'
 sdk: org.gnome.Sdk
-command: buscador-pdf
+command: lynx-atlas
 
 finish-args:
   - --socket=fallback-x11
@@ -25,35 +25,39 @@ modules:
       - type: file
         path: requirements.txt
 
-  - name: buscador-pdf
+  - name: lynx-atlas
     buildsystem: simple
     build-commands:
-      - install -Dm644 main.py /app/share/buscador-pdf/main.py
-      - install -Dm644 bridge.py /app/share/buscador-pdf/bridge.py
-      - mkdir -p /app/share/buscador-pdf/core /app/share/buscador-pdf/ui
-      - install -m644 core/*.py /app/share/buscador-pdf/core/
-      - install -m644 ui/*.qml /app/share/buscador-pdf/ui/
-      - install -Dm644 icone.png /app/share/icons/hicolor/512x512/apps/com.leobelisario.BuscadorPDF.png
+      - install -Dm644 main.py /app/share/lynx-atlas/main.py
+      - install -Dm644 bridge.py /app/share/lynx-atlas/bridge.py
+      - mkdir -p /app/share/lynx-atlas/core /app/share/lynx-atlas/ui
+      - install -m644 core/*.py /app/share/lynx-atlas/core/
+      - install -m644 ui/*.qml /app/share/lynx-atlas/ui/
+      - install -Dm644 icone.png /app/share/icons/hicolor/512x512/apps/com.leobelisario.LYNXAtlas.png
+      - mkdir -p /app/share/doc/lynx-atlas/licenses
+      - install -m644 LICENSE README.md THIRD_PARTY_NOTICES.md /app/share/doc/lynx-atlas/
+      - install -m644 licenses/* /app/share/doc/lynx-atlas/licenses/
       - mkdir -p /app/bin /app/share/applications
       - |
-        cat << 'EOF' > /app/bin/buscador-pdf
+        cat << 'EOF' > /app/bin/lynx-atlas
         #!/bin/sh
         set -eu
-        export PYTHONPATH="/app/share/buscador-pdf${PYTHONPATH:+:$PYTHONPATH}"
+        export PYTHONPATH="/app/share/lynx-atlas${PYTHONPATH:+:$PYTHONPATH}"
         export PYTHONDONTWRITEBYTECODE=1
         # main.py abre index.db por caminho relativo; /app é somente leitura.
         mkdir -p "$XDG_DATA_HOME"
         cd "$XDG_DATA_HOME"
-        exec python3 /app/share/buscador-pdf/main.py "$@"
+        exec python3 /app/share/lynx-atlas/main.py "$@"
         EOF
-      - chmod +x /app/bin/buscador-pdf
+      - chmod +x /app/bin/lynx-atlas
       - |
-        cat << 'EOF' > /app/share/applications/com.leobelisario.BuscadorPDF.desktop
+        cat << 'EOF' > /app/share/applications/com.leobelisario.LYNXAtlas.desktop
         [Desktop Entry]
-        Name=BuscadorPDF
-        Comment=Indexação e busca de conteúdo em documentos PDF
-        Exec=buscador-pdf
-        Icon=com.leobelisario.BuscadorPDF
+        Name=LYNX Atlas
+        GenericName=Pesquisa e indexação de PDFs
+        Comment=Fast PDF Search & Indexing
+        Exec=lynx-atlas
+        Icon=com.leobelisario.LYNXAtlas
         Terminal=false
         Type=Application
         Categories=Office;Utility;
@@ -78,4 +82,4 @@ modules:
           - 'index.db*'
 
 # Comandos principais (execute na raiz do projeto):
-# flatpak-builder --repo=repo --force-clean build-dir com.leobelisario.BuscadorPDF.yaml && flatpak build-bundle repo BuscadorPDF.flatpak com.leobelisario.BuscadorPDF && flatpak install --user --reinstall BuscadorPDF.flatpak
+# flatpak-builder --repo=repo --force-clean build-dir com.leobelisario.LYNXAtlas.yaml && flatpak build-bundle repo LYNXAtlas.flatpak com.leobelisario.LYNXAtlas && flatpak install --user --reinstall LYNXAtlas.flatpak

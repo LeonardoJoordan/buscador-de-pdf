@@ -10,9 +10,23 @@ ApplicationWindow {
     minimumWidth: 1060
     minimumHeight: 600
     visible: true
-    title: "Buscador de Conteúdo PDF"
+    title: "LYNX Atlas — Fast PDF Search & Indexing"
 
     color: "#1e1e24"
+
+    // Mantém os controles Fusion no mesmo tema escuro em qualquer sistema.
+    palette.window: "#1e1e24"
+    palette.windowText: "#e0e0e0"
+    palette.base: "#2a2a34"
+    palette.alternateBase: "#25252d"
+    palette.text: "#e0e0e0"
+    palette.button: "#343440"
+    palette.buttonText: "#ffffff"
+    palette.highlight: "#3d7eff"
+    palette.highlightedText: "#ffffff"
+    palette.placeholderText: "#8b8b96"
+    palette.toolTipBase: "#343440"
+    palette.toolTipText: "#ffffff"
 
     MouseArea {
         anchors.fill: parent
@@ -44,6 +58,10 @@ ApplicationWindow {
         }
     }
 
+    function fileName(filepath) {
+        return filepath.replace(/\\/g, "/").split("/").pop()
+    }
+
     readonly property real zoomMin: 0.4
     readonly property real zoomMax: 3.5
     readonly property real zoomStep: 0.15
@@ -54,6 +72,7 @@ ApplicationWindow {
     property int selectedManualCount: 0
     property var generalViewState: null
     property var directedViewState: null
+    property var unsupportedExtensions: []
 
     ListModel { id: directedManualsModel }
 
@@ -153,6 +172,10 @@ ApplicationWindow {
             if (!Bridge.isDirectedSearch)
                 root.refreshDirectedManuals()
         }
+        function onUnsupportedExtensionsFound(extensions) {
+            root.unsupportedExtensions = extensions
+            unsupportedFilesDialog.open()
+        }
     }
 
     Component.onCompleted: refreshDirectedManuals()
@@ -226,6 +249,93 @@ ApplicationWindow {
         title: "Selecione a pasta com PDFs"
         onAccepted: {
             Bridge.startIndexing(selectedFolder)
+        }
+    }
+
+    Dialog {
+        id: unsupportedFilesDialog
+        title: "Formatos não indexados"
+        modal: true
+        standardButtons: Dialog.Ok
+        anchors.centerIn: parent
+        width: Math.min(620, root.width - 48)
+
+        contentItem: ColumnLayout {
+            spacing: 12
+
+            Text {
+                Layout.fillWidth: true
+                text: "A pasta selecionada contém arquivos "
+                      + root.unsupportedExtensions.join(", ") + "."
+                wrapMode: Text.Wrap
+                color: "#e0e0e0"
+                font.pixelSize: 12
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "Esses formatos não serão indexados. Para pesquisar o conteúdo "
+                      + "desses arquivos, exporte-os para PDF usando o aplicativo de "
+                      + "origem, coloque as versões em PDF nesta pasta e clique no "
+                      + "botão Reindexar do programa."
+                wrapMode: Text.Wrap
+                color: "#c8c8cf"
+                font.pixelSize: 12
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "Os arquivos PDF encontrados já estão sendo indexados normalmente."
+                wrapMode: Text.Wrap
+                color: "#8b8b96"
+                font.pixelSize: 11
+            }
+        }
+    }
+
+    Dialog {
+        id: aboutDialog
+        title: "Sobre o LYNX Atlas"
+        modal: true
+        standardButtons: Dialog.Close
+        anchors.centerIn: parent
+        width: Math.min(520, root.width - 48)
+
+        contentItem: ColumnLayout {
+            spacing: 10
+            Text {
+                text: "LYNX Atlas"
+                color: "#ffffff"
+                font.pixelSize: 20
+                font.bold: true
+            }
+            Text {
+                text: "Fast PDF Search & Indexing"
+                color: "#8b8b96"
+                font.pixelSize: 11
+            }
+            Text {
+                Layout.fillWidth: true
+                text: "Software livre sob GNU AGPL v3.0. Este programa é fornecido "
+                      + "sem qualquer garantia. Você pode redistribuí-lo e modificá-lo "
+                      + "nos termos da licença."
+                wrapMode: Text.Wrap
+                color: "#c8c8cf"
+                font.pixelSize: 12
+            }
+            Text {
+                text: "Código-fonte e licenças"
+                color: linkArea.containsMouse ? "#82b1ff" : "#5ca0f2"
+                font.pixelSize: 12
+                font.underline: true
+                MouseArea {
+                    id: linkArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: Qt.openUrlExternally("https://github.com/LeonardoJoordan/buscador-de-pdf")
+                }
+            }
         }
     }
 
@@ -361,6 +471,23 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.margins: 12
                 spacing: 10
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 1
+
+                    Text {
+                        text: "LYNX Atlas"
+                        color: "#ffffff"
+                        font.pixelSize: 21
+                        font.bold: true
+                    }
+                    Text {
+                        text: "Fast PDF Search & Indexing"
+                        color: "#8b8b96"
+                        font.pixelSize: 10
+                    }
+                }
 
                 ColumnLayout {
                     id: directedSearchPanel
@@ -546,12 +673,12 @@ ApplicationWindow {
 
                     Button {
                         text: "Reindexar"
-                        enabled: !Bridge.isIndexing && Bridge.indexedFiles.length > 0
+                        enabled: !Bridge.isIndexing
                         Layout.fillWidth: true
                         Layout.preferredWidth: 0
                         ToolTip.visible: hovered
-                        ToolTip.text: "Reindexar arquivos já catalogados"
-                        onClicked: Bridge.reindexAll()
+                        ToolTip.text: "Sincronizar novamente a pasta selecionada"
+                        onClicked: if (!Bridge.reindexAll()) folderPicker.open()
                     }
                 }
 
@@ -609,6 +736,12 @@ ApplicationWindow {
                 Item {
                     visible: !indexedHeader.expanded
                     Layout.fillHeight: true
+                }
+
+                ToolButton {
+                    Layout.fillWidth: true
+                    text: "Sobre e licenças"
+                    onClicked: aboutDialog.open()
                 }
             }
         }
@@ -724,7 +857,7 @@ ApplicationWindow {
                             RowLayout {
                                 Layout.fillWidth: true
                                 Text {
-                                    text: modelData.filepath.split('/').pop()
+                                    text: root.fileName(modelData.filepath)
                                     font.bold: true
                                     font.pixelSize: 12
                                     color: "#5ca0f2"

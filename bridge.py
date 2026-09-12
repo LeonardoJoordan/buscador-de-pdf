@@ -62,6 +62,7 @@ class AppBridge(QObject):
     searchStateChanged = Signal()
     directedSearchChanged = Signal()
     generalSearchReplaced = Signal()
+    unsupportedExtensionsFound = Signal(list)
 
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
@@ -86,7 +87,7 @@ class AppBridge(QObject):
         self._current_total_pages = 1
 
         # Configurações avançadas de busca, persistidas entre sessões
-        self._settings = QSettings("CustomTools", "BuscadorPDF")
+        self._settings = QSettings("LYNX", "LYNXAtlas")
         self._allow_out_of_order = self._settings.value("search/allowOutOfOrder", True, type=bool)
         self._allow_fuzzy = self._settings.value("search/allowFuzzy", True, type=bool)
         self._fuzzy_threshold = self._settings.value("search/fuzzyThreshold", 65, type=int)
@@ -355,9 +356,11 @@ class AppBridge(QObject):
         # QML envia URLs do tipo "file:///caminho"
         if self._is_indexing:
             return
-        folder_path = QUrl(folder_url).toLocalFile()
+        folder_path = os.path.abspath(QUrl(folder_url).toLocalFile())
         if not os.path.isdir(folder_path):
             return
+
+        self._settings.setValue("index/folderPath", folder_path)
 
         self._is_indexing = True
         self.isIndexingChanged.emit(True)
@@ -367,24 +370,27 @@ class AppBridge(QObject):
         self.worker.indexing_finished.connect(self._on_indexing_finished)
         self.worker.start()
 
-    @Slot()
+    @Slot(result=bool)
     def reindexAll(self):
-        """Reprocessa apenas os arquivos já presentes em 'Arquivos Indexados',
-        sem exigir escolher a pasta novamente (não descobre arquivos novos)."""
+        """Sincroniza novamente o índice com a última pasta selecionada."""
         if self._is_indexing:
-            return
+            return False
 
-        file_paths = [item["filepath"] for item in self._indexed_files]
-        if not file_paths:
-            return
+        folder_path = self._settings.value("index/folderPath", "", type=str)
+        if not folder_path or not os.path.isdir(folder_path):
+            return False
 
         self._is_indexing = True
         self.isIndexingChanged.emit(True)
 
-        self.worker = IndexerWorker(self.db, file_paths=file_paths)
+        self.worker = IndexerWorker(
+            self.db, folder_path=folder_path, report_unsupported=True
+        )
         self.worker.progress_changed.connect(self._on_indexing_progress)
+        self.worker.unsupported_extensions_found.connect(self.unsupportedExtensionsFound.emit)
         self.worker.indexing_finished.connect(self._on_indexing_finished)
         self.worker.start()
+        return True
 
     def _on_indexing_progress(self, current: int, total: int):
         self.indexingProgressChanged.emit(current, total)
@@ -393,6 +399,19 @@ class AppBridge(QObject):
         self._is_indexing = False
         self.isIndexingChanged.emit(False)
         self.refresh_indexed_files()
+
+        # Resultados e prévias podem apontar para arquivos removidos ou para
+        # conteúdo anterior à reindexação; descarte esse estado obsoleto.
+        self._search_results = []
+        self._search_error = ""
+        self._last_query = ""
+        self._current_preview_path = ""
+        self._current_preview_page = 1
+        self._current_total_pages = 1
+        self._reset_directed_search()
+        self.searchResultsChanged.emit()
+        self.searchStateChanged.emit()
+        self.previewChanged.emit()
 
     @Slot()
     def refresh_indexed_files(self):
@@ -431,6 +450,10 @@ class AppBridge(QObject):
         Fallback direto para xdg-open se nenhum leitor específico responder.
         """
         if not os.path.exists(filepath):
+            return
+
+        if os.name == "nt":
+            os.startfile(filepath)
             return
 
         # Lista de leitores comuns no Linux que suportam `-p <pagina>`
